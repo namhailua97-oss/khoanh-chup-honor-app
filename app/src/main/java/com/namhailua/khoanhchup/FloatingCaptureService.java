@@ -1,4 +1,3 @@
-
 package com.namhailua.khoanhchup;
 
 import android.app.*;
