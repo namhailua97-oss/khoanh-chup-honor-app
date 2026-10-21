@@ -7,9 +7,6 @@
     <uses-permission
         android:name="android.permission.FOREGROUND_SERVICE" />
 
-    <uses-permission
-        android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
-
     <application
         android:allowBackup="false"
         android:label="Khoanh Chup HONOR"
@@ -28,8 +25,8 @@
 
         <service
             android:name=".FloatingCaptureService"
-            android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
+            android:exported="false" />
 
     </application>
+
 </manifest>
