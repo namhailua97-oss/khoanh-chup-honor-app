@@ -13,12 +13,15 @@
     <uses-permission
         android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
 
+    <uses-permission
+        android:name="android.permission.POST_NOTIFICATIONS"/>
+
     <application
-        android:label="Khoanh Chụp HONOR V6"
+        android:allowBackup="false"
         android:icon="@drawable/app_cat_icon"
         android:roundIcon="@drawable/app_cat_icon"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar"
-        android:allowBackup="false">
+        android:label="Khoanh Chụp HONOR V6"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
         <activity
             android:name=".MainActivity"
@@ -38,7 +41,7 @@
 
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="User controlled floating screenshot button"/>
+                android:value="User-controlled floating screenshot button"/>
         </service>
 
         <service
@@ -47,4 +50,5 @@
             android:foregroundServiceType="mediaProjection"/>
 
     </application>
+
 </manifest>
