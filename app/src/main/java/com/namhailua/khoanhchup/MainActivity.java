@@ -30,7 +30,15 @@ public class MainActivity extends Activity {
         title.setTextSize(25);
         title.setGravity(Gravity.CENTER);
         root.addView(title);
-
+ImageView catImage = new ImageView(this);
+catImage.setImageResource(
+    getResources().getIdentifier(
+        "app_cat_icon", "drawable", getPackageName()
+    )
+);
+catImage.setAdjustViewBounds(true);
+catImage.setMaxHeight(220);
+root.addView(catImage);
         Button floatButton = new Button(this);
         floatButton.setText("BẬT MÈO NỔI");
         root.addView(floatButton);
