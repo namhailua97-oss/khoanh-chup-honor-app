@@ -1,103 +1,202 @@
 package com.namhailua.khoanhchup;
 
 import android.app.Activity;
-import android.os.Bundle;
-import android.os.Build;
-import android.content.Intent;
+import android.content.*;
 import android.media.projection.MediaProjectionManager;
-import android.content.Context;
-import android.provider.Settings;
 import android.net.Uri;
-import android.widget.*;
+import android.os.*;
+import android.provider.Settings;
 import android.view.Gravity;
+import android.widget.*;
 
 public class MainActivity extends Activity {
-
     private static final int REQUEST_CAPTURE = 101;
+    private static final int REQUEST_OVERLAY = 102;
+
+    private boolean asking;
     private TextView status;
 
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
+    public void onCreate(Bundle saved) {
+        super.onCreate(saved);
 
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setGravity(Gravity.CENTER);
-        layout.setPadding(30, 30, 30, 30);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setGravity(Gravity.CENTER);
+        root.setPadding(28, 35, 28, 35);
 
         TextView title = new TextView(this);
-        title.setText("🐱 KHOANH CHỤP HONOR V5");
-        title.setTextSize(23);
+        title.setText("🐱 KHOANH CHỤP V6");
+        title.setTextSize(25);
         title.setGravity(Gravity.CENTER);
-        layout.addView(title);
+        root.addView(title);
+
+        Button floatButton = new Button(this);
+        floatButton.setText("BẬT MÈO NỔI");
+        root.addView(floatButton);
 
         Button start = new Button(this);
-        start.setText("BẬT MÈO KHOANH CHỤP");
-        layout.addView(start);
+        start.setText("BẮT ĐẦU PHIÊN CHỤP");
+        root.addView(start);
+
+        Button snap = new Button(this);
+        snap.setText("KHOANH CHỤP NGAY");
+        root.addView(snap);
 
         Button stop = new Button(this);
-        stop.setText("DỪNG CHỤP");
-        layout.addView(stop);
+        stop.setText("DỪNG CHỤP VÀ TẮT MÈO");
+        root.addView(stop);
 
         status = new TextView(this);
-        status.setText("Chạm BẬT để bắt đầu phiên chụp");
+        status.setText("Bật mèo, rồi bắt đầu phiên chụp.");
+        status.setTextSize(16);
         status.setGravity(Gravity.CENTER);
-        status.setPadding(0, 25, 0, 0);
-        layout.addView(status);
+        root.addView(status);
 
-        setContentView(layout);
+        setContentView(root);
 
-        start.setOnClickListener(v -> {
-            if (!Settings.canDrawOverlays(this)) {
-                status.setText("Hãy cho phép hiển thị trên ứng dụng khác");
-                Intent intent = new Intent(
-                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:" + getPackageName())
+        floatButton.setOnClickListener(v -> startFloating());
+
+        start.setOnClickListener(v -> beginPermission());
+
+        snap.setOnClickListener(v -> {
+            if (ScreenCaptureService.isActive()) {
+                startService(
+                    new Intent(this, ScreenCaptureService.class)
+                        .setAction(ScreenCaptureService.ACTION_SNAP)
                 );
-                startActivity(intent);
-                return;
+                moveTaskToBack(true);
+            } else {
+                beginPermission();
             }
-
-            MediaProjectionManager manager =
-                (MediaProjectionManager)
-                getSystemService(Context.MEDIA_PROJECTION_SERVICE);
-
-            startActivityForResult(
-                manager.createScreenCaptureIntent(),
-                REQUEST_CAPTURE
-            );
         });
 
         stop.setOnClickListener(v -> {
-            stopService(new Intent(this, FloatingCaptureService.class));
-            status.setText("Đã dừng phiên chụp");
+            startService(
+                new Intent(this, ScreenCaptureService.class)
+                    .setAction(ScreenCaptureService.ACTION_STOP)
+            );
+
+            stopService(
+                new Intent(this, FloatingCaptureService.class)
+            );
+
+            status.setText("Đã dừng");
         });
+
+        handleIntent(getIntent());
+    }
+
+    private void startFloating() {
+        if (!Settings.canDrawOverlays(this)) {
+            startActivityForResult(
+                new Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:" + getPackageName())
+                ),
+                REQUEST_OVERLAY
+            );
+            return;
+        }
+
+        try {
+            startForegroundService(
+                new Intent(this, FloatingCaptureService.class)
+            );
+            status.setText("Mèo đã được bật");
+
+        } catch (Exception e) {
+            status.setText(
+                "Không bật được mèo: " + e.getMessage()
+            );
+        }
+    }
+
+    private void handleIntent(Intent intent) {
+        if (intent != null &&
+            "com.namhailua.khoanhchup.CAPTURE"
+                .equals(intent.getAction())) {
+
+            if (ScreenCaptureService.isActive()) {
+                startService(
+                    new Intent(this, ScreenCaptureService.class)
+                        .setAction(ScreenCaptureService.ACTION_SNAP)
+                );
+                moveTaskToBack(true);
+            } else {
+                beginPermission();
+            }
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleIntent(intent);
+    }
+
+    private void beginPermission() {
+        if (asking) return;
+
+        if (!Settings.canDrawOverlays(this)) {
+            startFloating();
+            return;
+        }
+
+        if (ScreenCaptureService.isActive()) {
+            status.setText("Phiên chụp đang hoạt động");
+            return;
+        }
+
+        asking = true;
+
+        MediaProjectionManager manager =
+            (MediaProjectionManager)
+                getSystemService(MEDIA_PROJECTION_SERVICE);
+
+        startActivityForResult(
+            manager.createScreenCaptureIntent(),
+            REQUEST_CAPTURE
+        );
     }
 
     @Override
     protected void onActivityResult(
-        int requestCode, int resultCode, Intent data
+        int request,
+        int result,
+        Intent data
     ) {
-        super.onActivityResult(requestCode, resultCode, data);
+        super.onActivityResult(request, result, data);
 
-        if (requestCode == REQUEST_CAPTURE) {
-            if (resultCode == RESULT_OK && data != null) {
-                Intent service = new Intent(
-                    this, FloatingCaptureService.class
-                );
+        if (request == REQUEST_OVERLAY) {
+            if (Settings.canDrawOverlays(this)) {
+                startFloating();
+            }
+            return;
+        }
 
-                service.putExtra("resultCode", resultCode);
-                service.putExtra("resultData", data);
+        if (request == REQUEST_CAPTURE) {
+            asking = false;
 
-                if (Build.VERSION.SDK_INT >= 26) {
-                    startForegroundService(service);
-                } else {
-                    startService(service);
-                }
+            if (result != RESULT_OK || data == null) {
+                status.setText("Bạn đã hủy cấp quyền");
+                return;
+            }
 
-                status.setText("Đã yêu cầu bật mèo nổi 🐱");
-            } else {
-                status.setText("Bạn chưa cấp quyền chụp màn hình");
+            Intent i = new Intent(
+                this,
+                ScreenCaptureService.class
+            ).setAction(ScreenCaptureService.ACTION_START);
+
+            i.putExtra("resultCode", result);
+            i.putExtra("resultData", data);
+
+            try {
+                startForegroundService(i);
+                moveTaskToBack(true);
+            } catch (Exception e) {
+                status.setText("Lỗi: " + e.getMessage());
             }
         }
     }
