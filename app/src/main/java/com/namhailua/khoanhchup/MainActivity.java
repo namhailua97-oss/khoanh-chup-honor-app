@@ -9,6 +9,7 @@ import android.provider.Settings;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 import android.view.Gravity;
 
 public class MainActivity extends Activity {
@@ -44,9 +45,12 @@ public class MainActivity extends Activity {
         status.setTextSize(17);
         layout.addView(status);
 
+        // Hien thi giao dien len man hinh
+        setContentView(layout);
+
         enable.setOnClickListener(v -> {
             if (!Settings.canDrawOverlays(this)) {
-                status.setText("Hay cap quyen hien thi tren ung dung khac");
+                status.setText("Hay cap quyen hien thi noi");
 
                 Intent intent = new Intent(
                     Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -57,22 +61,34 @@ public class MainActivity extends Activity {
             }
 
             Intent service = new Intent(
-                this, FloatingCaptureService.class
+                this,
+                FloatingCaptureService.class
             );
 
-            if (Build.VERSION.SDK_INT >= 26) {
-                startForegroundService(service);
-            } else {
-                startService(service);
-            }
+            try {
+                if (Build.VERSION.SDK_INT >= 26) {
+                    startForegroundService(service);
+                } else {
+                    startService(service);
+                }
 
-            status.setText("Da bat nut camera noi");
+                status.setText("Dang bat nut camera noi");
+            } catch (Exception e) {
+                status.setText("Khong bat duoc nut noi");
+                Toast.makeText(
+                    this,
+                    e.getMessage(),
+                    Toast.LENGTH_LONG
+                ).show();
+            }
         });
 
         disable.setOnClickListener(v -> {
             stopService(new Intent(
-                this, FloatingCaptureService.class
+                this,
+                FloatingCaptureService.class
             ));
+
             status.setText("Da tat nut camera noi");
         });
     }
