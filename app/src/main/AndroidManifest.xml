@@ -8,6 +8,7 @@
 
     <application
         android:allowBackup="false"
+        android:icon="@drawable/cat_icon"
         android:label="Khoanh Chụp HONOR"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
