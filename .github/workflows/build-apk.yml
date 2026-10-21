@@ -2,14 +2,13 @@
 name: Build KhoanhChup APK
 
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout source
@@ -21,17 +20,20 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Accept Android licenses
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
 
       - name: Install Android SDK
         run: |
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.7'
+          gradle-version: '8.10.2'
 
       - name: Build Debug APK
         run: gradle assembleDebug --stacktrace
@@ -39,6 +41,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: KhoanhChup-HONOR-APK
+          name: KhoanhChup-APK
           path: app/build/outputs/apk/debug/*.apk
-          
