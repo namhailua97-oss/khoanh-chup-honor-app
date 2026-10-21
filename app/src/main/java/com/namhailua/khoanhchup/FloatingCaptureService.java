@@ -1,66 +1,156 @@
+
 package com.namhailua.khoanhchup;
 
-import android.app.Service;
-import android.app.Notification;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
-import android.content.Intent;
-import android.graphics.Color;
+import android.app.*;
+import android.content.*;
 import android.graphics.PixelFormat;
-import android.os.Build;
-import android.os.IBinder;
+import android.os.*;
 import android.provider.Settings;
-import android.view.Gravity;
-import android.view.MotionEvent;
-import android.view.View;
-import android.view.ViewConfiguration;
-import android.view.WindowManager;
-import android.widget.TextView;
-import android.widget.Toast;
+import android.view.*;
+import android.widget.*;
 
 public class FloatingCaptureService extends Service {
 
     private WindowManager wm;
     private TextView cat;
     private WindowManager.LayoutParams params;
-
-    private static final String CHANNEL = "khoanhchup_float";
+    private static final String CHANNEL = "khoanh_float";
 
     @Override
     public void onCreate() {
         super.onCreate();
 
         try {
-            startNotification();
+            createNotification();
 
             if (!Settings.canDrawOverlays(this)) {
                 stopSelf();
                 return;
             }
 
-            createCatButton();
+            wm = (WindowManager)
+                getSystemService(WINDOW_SERVICE);
+
+            cat = new TextView(this);
+            cat.setText("🐱");
+            cat.setTextSize(36);
+            cat.setGravity(Gravity.CENTER);
+            cat.setBackgroundColor(0x00000000);
+            cat.setIncludeFontPadding(false);
+
+            int size = (int)(64 *
+                getResources().getDisplayMetrics().density);
+
+            params = new WindowManager.LayoutParams(
+                size, size,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT
+            );
+
+            params.gravity = Gravity.TOP | Gravity.LEFT;
+            params.x = 25;
+            params.y = 350;
+
+            wm.addView(cat, params);
+
+            int slop = ViewConfiguration.get(this)
+                .getScaledTouchSlop() * 2;
+
+            cat.setOnTouchListener(new View.OnTouchListener() {
+                int startX, startY;
+                float downX, downY;
+                boolean dragging;
+
+                @Override
+                public boolean onTouch(View v, MotionEvent e) {
+                    switch (e.getActionMasked()) {
+                        case MotionEvent.ACTION_DOWN:
+                            startX = params.x;
+                            startY = params.y;
+                            downX = e.getRawX();
+                            downY = e.getRawY();
+                            dragging = false;
+                            return true;
+
+                        case MotionEvent.ACTION_MOVE:
+                            float dx = e.getRawX() - downX;
+                            float dy = e.getRawY() - downY;
+
+                            if (Math.hypot(dx, dy) > slop) {
+                                dragging = true;
+                            }
+
+                            if (dragging) {
+                                params.x = startX + (int)dx;
+                                params.y = startY + (int)dy;
+                                wm.updateViewLayout(cat, params);
+                            }
+                            return true;
+
+                        case MotionEvent.ACTION_UP:
+                            if (!dragging) {
+                                openCapture();
+                            }
+                            return true;
+                    }
+                    return true;
+                }
+            });
 
         } catch (Exception e) {
             Toast.makeText(this,
-                "Loi: " + e.getMessage(),
+                "Loi nut noi: " + e.getMessage(),
                 Toast.LENGTH_LONG).show();
             stopSelf();
         }
     }
 
-    private void startNotification() {
+    private void openCapture() {
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.setAction(
+            "com.namhailua.khoanhchup.CAPTURE");
+        intent.addFlags(
+            Intent.FLAG_ACTIVITY_NEW_TASK |
+            Intent.FLAG_ACTIVITY_SINGLE_TOP |
+            Intent.FLAG_ACTIVITY_CLEAR_TOP);
+
+        try {
+            startActivity(intent);
+        } catch (Exception e) {
+            Toast.makeText(this,
+                "Khong mo duoc chup man hinh",
+                Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    @Override
+    public int onStartCommand(
+        Intent intent, int flags, int startId) {
+
+        if (cat != null && intent != null) {
+            String action = intent.getAction();
+
+            if ("HIDE".equals(action)) {
+                cat.setVisibility(View.GONE);
+            } else if ("SHOW".equals(action)) {
+                cat.setVisibility(View.VISIBLE);
+            }
+        }
+
+        return START_STICKY;
+    }
+
+    private void createNotification() {
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationChannel channel =
                 new NotificationChannel(
                     CHANNEL,
-                    "Khoanh Chup HONOR",
-                    NotificationManager.IMPORTANCE_LOW
-                );
+                    "Khoanh Chup",
+                    NotificationManager.IMPORTANCE_LOW);
 
-            NotificationManager manager =
-                getSystemService(NotificationManager.class);
-
-            manager.createNotificationChannel(channel);
+            getSystemService(NotificationManager.class)
+                .createNotificationChannel(channel);
         }
 
         Notification.Builder builder;
@@ -72,111 +162,13 @@ public class FloatingCaptureService extends Service {
         }
 
         Notification notification = builder
-            .setContentTitle("Khoanh Chup HONOR")
-            .setContentText("Nut meo noi dang hoat dong")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .setContentTitle("Khoanh Chup HONOR")
+            .setContentText("Nut meo dang hoat dong")
             .setOngoing(true)
             .build();
 
         startForeground(1001, notification);
-    }
-
-    private void createCatButton() {
-
-        wm = (WindowManager)
-            getSystemService(WINDOW_SERVICE);
-
-        cat = new TextView(this);
-        cat.setText("🐱");
-        cat.setTextSize(35);
-        cat.setGravity(Gravity.CENTER);
-        cat.setBackgroundColor(Color.TRANSPARENT);
-        cat.setIncludeFontPadding(false);
-
-        int size = (int) (
-            64 * getResources().getDisplayMetrics().density
-        );
-
-        params = new WindowManager.LayoutParams(
-            size,
-            size,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
-        );
-
-        params.gravity = Gravity.TOP | Gravity.LEFT;
-        params.x = 20;
-        params.y = 350;
-
-        wm.addView(cat, params);
-
-        final int touchSlop =
-            ViewConfiguration.get(this).getScaledTouchSlop();
-
-        cat.setOnTouchListener(new View.OnTouchListener() {
-
-            private int startX;
-            private int startY;
-            private float downX;
-            private float downY;
-            private boolean dragging;
-
-            @Override
-            public boolean onTouch(View v, MotionEvent event) {
-
-                switch (event.getActionMasked()) {
-
-                    case MotionEvent.ACTION_DOWN:
-                        startX = params.x;
-                        startY = params.y;
-                        downX = event.getRawX();
-                        downY = event.getRawY();
-                        dragging = false;
-                        return true;
-
-                    case MotionEvent.ACTION_MOVE:
-                        float dx = event.getRawX() - downX;
-                        float dy = event.getRawY() - downY;
-
-                        if (!dragging &&
-                            Math.hypot(dx, dy) > touchSlop * 2) {
-                            dragging = true;
-                        }
-
-                        if (dragging) {
-                            params.x = startX + (int) dx;
-                            params.y = startY + (int) dy;
-                            wm.updateViewLayout(cat, params);
-                        }
-
-                        return true;
-
-                    case MotionEvent.ACTION_UP:
-                        if (!dragging) {
-                            Toast.makeText(
-                                FloatingCaptureService.this,
-                                "Da bam nut meo!",
-                                Toast.LENGTH_SHORT
-                            ).show();
-                            v.performClick();
-                        }
-                        return true;
-
-                    case MotionEvent.ACTION_CANCEL:
-                        return true;
-                }
-
-                return false;
-            }
-        });
-    }
-
-    @Override
-    public int onStartCommand(
-        Intent intent, int flags, int startId
-    ) {
-        return START_STICKY;
     }
 
     @Override
@@ -184,8 +176,7 @@ public class FloatingCaptureService extends Service {
         if (wm != null && cat != null) {
             try {
                 wm.removeView(cat);
-            } catch (Exception ignored) {
-            }
+            } catch (Exception ignored) {}
         }
         super.onDestroy();
     }
