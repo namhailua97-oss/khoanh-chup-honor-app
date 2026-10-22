@@ -7,10 +7,11 @@ import android.os.*;
 import android.provider.Settings;
 import android.view.*;
 import android.widget.*;
+import java.util.Random;
 
 public class FloatingCaptureService extends Service {
 
-    private static final String CHANNEL = "cat_overlay_v6";
+    private static final String CHANNEL = "cat_overlay_v7";
 
     private WindowManager wm;
     private WindowManager.LayoutParams params;
@@ -19,15 +20,38 @@ public class FloatingCaptureService extends Service {
     private final Handler handler =
         new Handler(Looper.getMainLooper());
 
-    private long lastTouch;
+    private final Random random = new Random();
+
     private boolean destroyed = false;
+    private boolean dragging = false;
+    private boolean hidden = false;
+
+    private long lastTouch;
+    private long nextChange;
+    private long sleepUntil;
+
+    private float speedX = 0;
+    private float speedY = 0;
+    private float posX;
+    private float posY;
+
+    private int screenWidth;
+    private int screenHeight;
+
+    private final int CAT_WIDTH_DP = 78;
+    private final int CAT_HEIGHT_DP = 88;
 
     private final Runnable animator = new Runnable() {
         @Override
         public void run() {
-            if (destroyed || cat == null) return;
-            cat.invalidate();
-            handler.postDelayed(this, 80);
+            if (destroyed) return;
+
+            if (cat != null && !hidden) {
+                updateCat();
+                cat.invalidate();
+            }
+
+            handler.postDelayed(this, 40);
         }
     };
 
@@ -38,44 +62,48 @@ public class FloatingCaptureService extends Service {
         wm = (WindowManager)
             getSystemService(WINDOW_SERVICE);
 
-        NotificationManager nm =
-            (NotificationManager)
-            getSystemService(NOTIFICATION_SERVICE);
-
         if (Build.VERSION.SDK_INT >= 26) {
+            NotificationManager nm =
+                (NotificationManager)
+                getSystemService(NOTIFICATION_SERVICE);
+
             nm.createNotificationChannel(
                 new NotificationChannel(
                     CHANNEL,
-                    "Mèo nổi Khoanh Chụp",
+                    "Mèo V7 tự đi lại",
                     NotificationManager.IMPORTANCE_LOW
                 )
             );
         }
+
+        updateScreenSize();
     }
 
     @Override
     public int onStartCommand(
         Intent intent, int flags, int startId
     ) {
+        String action =
+            intent == null ? null : intent.getAction();
 
-        if (intent != null) {
-            String action = intent.getAction();
-
-            if ("HIDE".equals(action)) {
-                removeCat();
-                return START_STICKY;
-            }
-
-            if ("SHOW".equals(action) && cat != null) {
-                return START_STICKY;
-            }
+        if ("HIDE".equals(action)) {
+            hideCat();
+            return START_STICKY;
         }
 
-        if (cat != null) return START_STICKY;
+        if ("SHOW".equals(action)) {
+            showHiddenCat();
+            return START_STICKY;
+        }
 
         if (!Settings.canDrawOverlays(this)) {
             stopSelf();
             return START_NOT_STICKY;
+        }
+
+        if (cat != null) {
+            showHiddenCat();
+            return START_STICKY;
         }
 
         Intent open =
@@ -89,42 +117,46 @@ public class FloatingCaptureService extends Service {
             PendingIntent.FLAG_IMMUTABLE
         );
 
-        Notification n =
-            new Notification.Builder(this, CHANNEL)
-                .setSmallIcon(
-                    android.R.drawable.ic_menu_camera
-                )
-                .setContentTitle("Khoanh Chụp HONOR V6")
-                .setContentText(
-                    "Mèo đang nổi trên màn hình"
-                )
-                .setContentIntent(pi)
-                .setOngoing(true)
-                .build();
+        Notification.Builder builder;
+
+        if (Build.VERSION.SDK_INT >= 26) {
+            builder = new Notification.Builder(
+                this, CHANNEL
+            );
+        } else {
+            builder = new Notification.Builder(this);
+        }
+
+        Notification notification = builder
+            .setSmallIcon(
+                android.R.drawable.ic_menu_camera
+            )
+            .setContentTitle("Khoanh Chụp V7")
+            .setContentText("Mèo đang đi lại trên màn hình")
+            .setContentIntent(pi)
+            .setOngoing(true)
+            .build();
 
         try {
-
             if (Build.VERSION.SDK_INT >= 34) {
                 startForeground(
                     1001,
-                    n,
+                    notification,
                     android.content.pm.ServiceInfo
                         .FOREGROUND_SERVICE_TYPE_SPECIAL_USE
                 );
             } else {
-                startForeground(1001, n);
+                startForeground(1001, notification);
             }
 
-            showCat();
+            createCat();
 
         } catch (Exception e) {
-
             Toast.makeText(
                 this,
-                "Không mở được mèo: " + e.getMessage(),
+                "Lỗi mèo: " + e.getMessage(),
                 Toast.LENGTH_LONG
             ).show();
-
             stopSelf();
         }
 
@@ -139,17 +171,48 @@ public class FloatingCaptureService extends Service {
         );
     }
 
-    private void showCat() {
+    private void updateScreenSize() {
+        android.util.DisplayMetrics dm =
+            new android.util.DisplayMetrics();
 
+        wm.getDefaultDisplay().getRealMetrics(dm);
+
+        screenWidth = dm.widthPixels;
+        screenHeight = dm.heightPixels;
+    }
+
+    private int maxX() {
+        return Math.max(
+            0, screenWidth - dp(CAT_WIDTH_DP)
+        );
+    }
+
+    private int maxY() {
+        return Math.max(
+            0, screenHeight - dp(CAT_HEIGHT_DP)
+                - dp(35)
+        );
+    }
+
+    private float clamp(
+        float value, float min, float max
+    ) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private void createCat() {
         if (cat != null) return;
+
+        destroyed = false;
+        hidden = false;
 
         lastTouch = System.currentTimeMillis();
 
         cat = new CatImage(this);
 
         params = new WindowManager.LayoutParams(
-            dp(106),
-            dp(119),
+            dp(CAT_WIDTH_DP),
+            dp(CAT_HEIGHT_DP),
             WindowManager.LayoutParams
                 .TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams
@@ -161,16 +224,14 @@ public class FloatingCaptureService extends Service {
 
         params.gravity = Gravity.TOP | Gravity.START;
 
-        android.util.DisplayMetrics dm =
-            new android.util.DisplayMetrics();
+        posX = maxX() - dp(12);
+        posY = dp(190);
 
-        wm.getDefaultDisplay().getRealMetrics(dm);
+        params.x = (int) clamp(posX, 0, maxX());
+        params.y = (int) clamp(posY, 0, maxY());
 
-        params.x = Math.max(
-            0, dm.widthPixels - dp(120)
-        );
-
-        params.y = dp(190);
+        posX = params.x;
+        posY = params.y;
 
         cat.setOnTouchListener(
             new View.OnTouchListener() {
@@ -181,68 +242,52 @@ public class FloatingCaptureService extends Service {
 
                 @Override
                 public boolean onTouch(
-                    View v, MotionEvent e
+                    View v, MotionEvent event
                 ) {
-
-                    switch (e.getActionMasked()) {
+                    switch (event.getActionMasked()) {
 
                         case MotionEvent.ACTION_DOWN:
+                            dragging = true;
+                            moved = false;
 
-                            downX = e.getRawX();
-                            downY = e.getRawY();
+                            downX = event.getRawX();
+                            downY = event.getRawY();
 
                             startX = params.x;
                             startY = params.y;
-
-                            moved = false;
 
                             lastTouch =
                                 System.currentTimeMillis();
 
                             cat.tapTime = lastTouch;
-
                             return true;
 
                         case MotionEvent.ACTION_MOVE:
-
                             int dx = Math.round(
-                                e.getRawX() - downX
+                                event.getRawX() - downX
                             );
 
                             int dy = Math.round(
-                                e.getRawY() - downY
+                                event.getRawY() - downY
                             );
 
                             if (
-                                Math.abs(dx) > dp(9) ||
-                                Math.abs(dy) > dp(9)
+                                Math.abs(dx) > dp(8) ||
+                                Math.abs(dy) > dp(8)
                             ) {
                                 moved = true;
                             }
 
                             if (moved) {
-
-                                params.x = Math.max(
-                                    0,
-                                    Math.min(
-                                        dm.widthPixels - dp(106),
-                                        startX + dx
-                                    )
+                                posX = clamp(
+                                    startX + dx, 0, maxX()
                                 );
 
-                                params.y = Math.max(
-                                    0,
-                                    Math.min(
-                                        dm.heightPixels - dp(125),
-                                        startY + dy
-                                    )
+                                posY = clamp(
+                                    startY + dy, 0, maxY()
                                 );
 
-                                try {
-                                    wm.updateViewLayout(
-                                        cat, params
-                                    );
-                                } catch (Exception ignored) {}
+                                moveView();
                             }
 
                             lastTouch =
@@ -251,11 +296,13 @@ public class FloatingCaptureService extends Service {
                             return true;
 
                         case MotionEvent.ACTION_UP:
+                            dragging = false;
 
                             lastTouch =
                                 System.currentTimeMillis();
 
                             if (!moved) {
+                                cat.tapTime = lastTouch;
                                 handler.postDelayed(
                                     () -> {
                                         if (!destroyed) {
@@ -264,11 +311,14 @@ public class FloatingCaptureService extends Service {
                                     },
                                     180
                                 );
+                            } else {
+                                chooseMovement();
                             }
 
                             return true;
 
                         case MotionEvent.ACTION_CANCEL:
+                            dragging = false;
                             return true;
                     }
 
@@ -279,11 +329,111 @@ public class FloatingCaptureService extends Service {
 
         wm.addView(cat, params);
 
+        chooseMovement();
+
         handler.removeCallbacks(animator);
         handler.post(animator);
     }
 
+    private void chooseMovement() {
+        long now = System.currentTimeMillis();
+
+        int choice = random.nextInt(6);
+
+        if (choice == 0) {
+            speedX = 0;
+            speedY = 0;
+            sleepUntil = now + 2500
+                + random.nextInt(4500);
+        } else {
+            speedX = (random.nextBoolean() ? 1 : -1)
+                * (0.7f + random.nextFloat() * 1.1f)
+                * getResources()
+                    .getDisplayMetrics().density;
+
+            speedY = (random.nextFloat() - 0.5f)
+                * 0.6f
+                * getResources()
+                    .getDisplayMetrics().density;
+
+            sleepUntil = 0;
+        }
+
+        nextChange = now + 1800
+            + random.nextInt(3000);
+    }
+
+    private void updateCat() {
+        if (dragging || cat == null) return;
+
+        long now = System.currentTimeMillis();
+
+        if (now >= nextChange) {
+            chooseMovement();
+        }
+
+        if (now < sleepUntil) {
+            return;
+        }
+
+        posX += speedX;
+        posY += speedY;
+
+        if (posX <= 0) {
+            posX = 0;
+            speedX = Math.abs(speedX);
+        }
+
+        if (posX >= maxX()) {
+            posX = maxX();
+            speedX = -Math.abs(speedX);
+        }
+
+        if (posY <= dp(20)) {
+            posY = dp(20);
+            speedY = Math.abs(speedY);
+        }
+
+        if (posY >= maxY()) {
+            posY = maxY();
+            speedY = -Math.abs(speedY);
+        }
+
+        cat.facingLeft = speedX < 0;
+
+        moveView();
+    }
+
+    private void moveView() {
+        if (cat == null || params == null) return;
+
+        params.x = Math.round(posX);
+        params.y = Math.round(posY);
+
+        try {
+            wm.updateViewLayout(cat, params);
+        } catch (Exception ignored) {}
+    }
+
+    private void hideCat() {
+        hidden = true;
+
+        if (cat != null) {
+            cat.setVisibility(View.GONE);
+        }
+    }
+
+    private void showHiddenCat() {
+        hidden = false;
+
+        if (cat != null) {
+            cat.setVisibility(View.VISIBLE);
+            chooseMovement();
+        }
+    }
+
     private void openCapture() {
+        if (destroyed) return;
 
         Intent open =
             new Intent(this, MainActivity.class);
@@ -302,22 +452,9 @@ public class FloatingCaptureService extends Service {
         } catch (Exception e) {
             Toast.makeText(
                 this,
-                "Không mở được chụp màn hình",
+                "Không mở được chức năng chụp",
                 Toast.LENGTH_SHORT
             ).show();
-        }
-    }
-
-    private void removeCat() {
-
-        handler.removeCallbacks(animator);
-
-        if (cat != null) {
-            try {
-                wm.removeView(cat);
-            } catch (Exception ignored) {}
-
-            cat = null;
         }
     }
 
@@ -330,7 +467,8 @@ public class FloatingCaptureService extends Service {
 
         private final Bitmap bitmap;
 
-        long tapTime;
+        boolean facingLeft = false;
+        long tapTime = 0;
 
         CatImage(Context context) {
             super(context);
@@ -354,24 +492,22 @@ public class FloatingCaptureService extends Service {
 
             long now = System.currentTimeMillis();
 
-            boolean asleep =
-                now - lastTouch >= 30000;
+            boolean sleeping =
+                now < sleepUntil;
 
             float t = now / 1000f;
 
-            float bounce = asleep
+            float bounce = sleeping
                 ? 0
-                : (float) Math.sin(t * 2.5f) * dp(2);
+                : (float) Math.sin(t * 9f) * dp(2);
 
-            float angle = asleep
-                ? 72f
-                : (float) Math.sin(t * 1.9f) * 4f;
+            float angle = sleeping
+                ? 15f
+                : (float) Math.sin(t * 5f) * 5f;
 
-            float size = asleep ? 0.76f : 1f;
-
-            if (now - tapTime < 550) {
+            if (now - tapTime < 500) {
+                bounce = -dp(6);
                 angle = -12f;
-                bounce = -dp(7);
             }
 
             float cx = getWidth() / 2f;
@@ -380,11 +516,17 @@ public class FloatingCaptureService extends Service {
             canvas.save();
 
             canvas.translate(cx, cy + bounce);
+
+            if (facingLeft) {
+                canvas.scale(-1f, 1f);
+            }
+
             canvas.rotate(angle);
-            canvas.scale(size, size);
 
             paint.setColor(Color.WHITE);
-            paint.setAlpha(asleep ? 225 : 255);
+            paint.setAlpha(
+                sleeping ? 220 : 255
+            );
 
             canvas.drawBitmap(
                 bitmap,
@@ -400,8 +542,7 @@ public class FloatingCaptureService extends Service {
 
             canvas.restore();
 
-            if (asleep) {
-
+            if (sleeping) {
                 paint.setColor(
                     Color.rgb(115, 74, 181)
                 );
@@ -410,17 +551,14 @@ public class FloatingCaptureService extends Service {
                     Typeface.DEFAULT_BOLD
                 );
 
-                paint.setTextSize(dp(17));
-                paint.setAlpha(220);
+                paint.setTextSize(dp(13));
 
                 canvas.drawText(
                     "Zzz",
-                    getWidth() * 0.55f,
-                    dp(22),
+                    getWidth() * 0.53f,
+                    dp(15),
                     paint
                 );
-
-                paint.setAlpha(255);
             }
         }
     }
@@ -432,12 +570,17 @@ public class FloatingCaptureService extends Service {
 
     @Override
     public void onDestroy() {
-
         destroyed = true;
 
         handler.removeCallbacksAndMessages(null);
 
-        removeCat();
+        if (cat != null) {
+            try {
+                wm.removeView(cat);
+            } catch (Exception ignored) {}
+
+            cat = null;
+        }
 
         super.onDestroy();
     }
