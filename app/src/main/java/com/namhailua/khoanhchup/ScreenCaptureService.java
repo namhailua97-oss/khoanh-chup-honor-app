@@ -3,12 +3,9 @@ package com.namhailua.khoanhchup;
 import android.app.*;
 import android.content.*;
 import android.graphics.*;
-import android.hardware.display.DisplayManager;
-import android.hardware.display.VirtualDisplay;
-import android.media.Image;
-import android.media.ImageReader;
-import android.media.projection.MediaProjection;
-import android.media.projection.MediaProjectionManager;
+import android.hardware.display.*;
+import android.media.*;
+import android.media.projection.*;
 import android.os.*;
 import android.provider.MediaStore;
 import android.view.*;
@@ -18,205 +15,545 @@ import java.nio.ByteBuffer;
 
 public class ScreenCaptureService extends Service {
 
-    private static final String CHANNEL = "khoanh_capture";
+    public static final String ACTION_START =
+        "com.namhailua.khoanhchup.START";
+    public static final String ACTION_SNAP =
+        "com.namhailua.khoanhchup.SNAP";
+    public static final String ACTION_STOP =
+        "com.namhailua.khoanhchup.STOP";
 
-    private Handler handler = new Handler(
-        Looper.getMainLooper());
+    private static final String CHANNEL = "capture_v7";
+    private static volatile boolean active = false;
+
+    public static boolean isActive() {
+        return active;
+    }
+
+    private final Handler handler =
+        new Handler(Looper.getMainLooper());
 
     private MediaProjection projection;
     private VirtualDisplay display;
     private ImageReader reader;
     private WindowManager wm;
-    private View cropOverlay;
+    private View overlay;
     private Bitmap screenshot;
-    private boolean captured = false;
+
+    private boolean pending = false;
+    private boolean destroyed = false;
+    private long captureAfter = 0;
+
+    private int width;
+    private int height;
 
     @Override
     public void onCreate() {
         super.onCreate();
 
+        wm = (WindowManager)
+            getSystemService(WINDOW_SERVICE);
+
         if (Build.VERSION.SDK_INT >= 26) {
-            NotificationChannel channel =
+            NotificationManager nm =
+                (NotificationManager)
+                getSystemService(NOTIFICATION_SERVICE);
+
+            nm.createNotificationChannel(
                 new NotificationChannel(
                     CHANNEL,
-                    "Chup man hinh",
-                    NotificationManager.IMPORTANCE_LOW);
-
-            getSystemService(NotificationManager.class)
-                .createNotificationChannel(channel);
+                    "Phiên khoanh chụp V7",
+                    NotificationManager.IMPORTANCE_LOW
+                )
+            );
         }
     }
 
     @Override
     public int onStartCommand(
-        Intent intent, int flags, int startId) {
-
-        Notification.Builder builder;
-
-        if (Build.VERSION.SDK_INT >= 26) {
-            builder = new Notification.Builder(this, CHANNEL);
-        } else {
-            builder = new Notification.Builder(this);
+        Intent intent, int flags, int startId
+    ) {
+        if (intent == null) {
+            if (!active) stopSelf();
+            return START_NOT_STICKY;
         }
 
-        Notification notification = builder
-            .setSmallIcon(android.R.drawable.ic_menu_camera)
-            .setContentTitle("Khoanh Chup HONOR")
-            .setContentText("Dang chup man hinh")
-            .build();
+        String action = intent.getAction();
+
+        if (ACTION_STOP.equals(action)) {
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+
+        if (ACTION_SNAP.equals(action)) {
+            if (active) requestSnapshot();
+            return START_STICKY;
+        }
+
+        if (active) return START_STICKY;
+
+        int resultCode = intent.getIntExtra(
+            "resultCode", Activity.RESULT_CANCELED
+        );
+
+        Intent data;
+
+        if (Build.VERSION.SDK_INT >= 33) {
+            data = intent.getParcelableExtra(
+                "resultData", Intent.class
+            );
+        } else {
+            data = intent.getParcelableExtra("resultData");
+        }
+
+        if (resultCode != Activity.RESULT_OK ||
+            data == null) {
+            stopSelf();
+            return START_NOT_STICKY;
+        }
 
         try {
+            Notification.Builder builder;
+
+            if (Build.VERSION.SDK_INT >= 26) {
+                builder = new Notification.Builder(
+                    this, CHANNEL
+                );
+            } else {
+                builder = new Notification.Builder(this);
+            }
+
+            Notification notification = builder
+                .setSmallIcon(
+                    android.R.drawable.ic_menu_camera
+                )
+                .setContentTitle("Khoanh Chụp V7")
+                .setContentText(
+                    "Đang duy trì phiên chụp màn hình"
+                )
+                .setOngoing(true)
+                .build();
+
             if (Build.VERSION.SDK_INT >= 29) {
                 startForeground(
                     1002,
                     notification,
                     android.content.pm.ServiceInfo
-                        .FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);
+                        .FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                );
             } else {
                 startForeground(1002, notification);
             }
 
-            if (intent == null) {
-                stopSelf();
-                return START_NOT_STICKY;
-            }
-
-            int resultCode = intent.getIntExtra(
-                "resultCode", Activity.RESULT_CANCELED);
-
-            Intent data;
-
-            if (Build.VERSION.SDK_INT >= 33) {
-                data = intent.getParcelableExtra(
-                    "resultData", Intent.class);
-            } else {
-                data = intent.getParcelableExtra("resultData");
-            }
-
-            if (resultCode != Activity.RESULT_OK ||
-                data == null) {
-                stopSelf();
-                return START_NOT_STICKY;
-            }
-
-            Intent hide = new Intent(
-                this, FloatingCaptureService.class);
-            hide.setAction("HIDE");
-            startService(hide);
-
-            handler.postDelayed(
-                () -> beginCapture(resultCode, data),
-                800);
+            beginSession(resultCode, data);
 
         } catch (Exception e) {
-            showError(e.getMessage());
-            finishCapture();
+            error("Không bắt đầu được: " + e.getMessage());
+            stopSelf();
         }
 
-        return START_NOT_STICKY;
+        return START_STICKY;
     }
 
-    private void beginCapture(int code, Intent data) {
-        try {
-            wm = (WindowManager)
-                getSystemService(WINDOW_SERVICE);
+    private void beginSession(int code, Intent data) {
 
-            android.util.DisplayMetrics metrics =
-                new android.util.DisplayMetrics();
+        android.util.DisplayMetrics dm =
+            new android.util.DisplayMetrics();
 
-            wm.getDefaultDisplay().getRealMetrics(metrics);
+        wm.getDefaultDisplay().getRealMetrics(dm);
 
-            int width = metrics.widthPixels;
-            int height = metrics.heightPixels;
-            int density = metrics.densityDpi;
+        width = dm.widthPixels;
+        height = dm.heightPixels;
 
-            reader = ImageReader.newInstance(
-                width, height,
-                PixelFormat.RGBA_8888, 2);
+        reader = ImageReader.newInstance(
+            width,
+            height,
+            PixelFormat.RGBA_8888,
+            3
+        );
 
-            MediaProjectionManager manager =
-                (MediaProjectionManager)
-                getSystemService(
-                    Context.MEDIA_PROJECTION_SERVICE);
+        MediaProjectionManager manager =
+            (MediaProjectionManager)
+            getSystemService(
+                Context.MEDIA_PROJECTION_SERVICE
+            );
 
-            projection = manager.getMediaProjection(
-                code, data);
+        projection = manager.getMediaProjection(
+            code, data
+        );
 
-            projection.registerCallback(
-                new MediaProjection.Callback() {
-                    @Override
-                    public void onStop() {
-                        releaseProjection();
-                    }
-                }, handler);
+        projection.registerCallback(
+            new MediaProjection.Callback() {
+                @Override
+                public void onStop() {
+                    active = false;
+                    handler.post(() -> stopSelf());
+                }
+            },
+            handler
+        );
 
-            reader.setOnImageAvailableListener(r -> {
-                if (captured) return;
-
+        reader.setOnImageAvailableListener(
+            r -> {
                 Image image = null;
 
                 try {
                     image = r.acquireLatestImage();
+
                     if (image == null) return;
 
-                    Image.Plane plane = image.getPlanes()[0];
+                    if (!pending ||
+                        SystemClock.uptimeMillis() <
+                            captureAfter) {
+                        return;
+                    }
 
-                    ByteBuffer buffer = plane.getBuffer();
+                    Image.Plane plane =
+                        image.getPlanes()[0];
 
-                    int pixelStride = plane.getPixelStride();
-                    int rowStride = plane.getRowStride();
+                    ByteBuffer buffer =
+                        plane.getBuffer();
 
-                    int paddedWidth = width +
-                        (rowStride - pixelStride * width)
-                        / pixelStride;
+                    int pixelStride =
+                        plane.getPixelStride();
 
-                    Bitmap padded = Bitmap.createBitmap(
-                        paddedWidth,
-                        height,
-                        Bitmap.Config.ARGB_8888);
+                    int rowStride =
+                        plane.getRowStride();
+
+                    int paddedWidth =
+                        width +
+                        (rowStride -
+                            pixelStride * width)
+                            / pixelStride;
+
+                    Bitmap padded =
+                        Bitmap.createBitmap(
+                            paddedWidth,
+                            height,
+                            Bitmap.Config.ARGB_8888
+                        );
 
                     padded.copyPixelsFromBuffer(buffer);
 
-                    screenshot = Bitmap.createBitmap(
-                        padded, 0, 0, width, height);
+                    Bitmap fresh =
+                        Bitmap.createBitmap(
+                            padded, 0, 0, width, height
+                        );
 
                     padded.recycle();
 
-                    captured = true;
+                    pending = false;
+
+                    if (screenshot != null) {
+                        screenshot.recycle();
+                    }
+
+                    screenshot = fresh;
+
+                    handler.post(
+                        () -> showCropOverlay()
+                    );
 
                 } catch (Exception e) {
-                    showError(e.getMessage());
+                    pending = false;
+                    error(e.getMessage());
+                    showCat();
                 } finally {
-                    if (image != null) image.close();
+                    if (image != null) {
+                        image.close();
+                    }
+                }
+            },
+            handler
+        );
+
+        display = projection.createVirtualDisplay(
+            "KhoanhChupV7",
+            width,
+            height,
+            dm.densityDpi,
+            DisplayManager
+                .VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            reader.getSurface(),
+            null,
+            handler
+        );
+
+        active = true;
+
+        Toast.makeText(
+            this,
+            "Đã bắt đầu phiên chụp",
+            Toast.LENGTH_SHORT
+        ).show();
+    }
+
+    private void requestSnapshot() {
+        if (!active || pending || overlay != null) {
+            return;
+        }
+
+        pending = true;
+
+        Intent hide = new Intent(
+            this, FloatingCaptureService.class
+        );
+        hide.setAction("HIDE");
+        startService(hide);
+
+        captureAfter =
+            SystemClock.uptimeMillis() + 450;
+
+        handler.postDelayed(() -> {
+            if (pending) {
+                pending = false;
+                error("Không nhận được ảnh màn hình");
+                showCat();
+            }
+        }, 5000);
+    }
+
+    private void showCropOverlay() {
+        if (destroyed || screenshot == null ||
+            overlay != null) {
+            return;
+        }
+
+        try {
+            FrameLayout root =
+                new FrameLayout(this);
+
+            root.setBackgroundColor(Color.BLACK);
+
+            CropView crop =
+                new CropView(this, screenshot);
+
+            root.addView(
+                crop,
+                new FrameLayout.LayoutParams(
+                    -1, -1
+                )
+            );
+
+            LinearLayout buttons =
+                new LinearLayout(this);
+
+            buttons.setGravity(Gravity.CENTER);
+            buttons.setBackgroundColor(0xDD202020);
+
+            Button cancel = new Button(this);
+            cancel.setText("HỦY");
+
+            Button save = new Button(this);
+            save.setText("CẮT VÀ LƯU");
+
+            buttons.addView(cancel);
+            buttons.addView(save);
+
+            FrameLayout.LayoutParams bp =
+                new FrameLayout.LayoutParams(
+                    -1, -2, Gravity.BOTTOM
+                );
+
+            root.addView(buttons, bp);
+
+            WindowManager.LayoutParams wp =
+                new WindowManager.LayoutParams(
+                    -1,
+                    -1,
+                    WindowManager.LayoutParams
+                        .TYPE_APPLICATION_OVERLAY,
+                    WindowManager.LayoutParams
+                        .FLAG_LAYOUT_IN_SCREEN,
+                    PixelFormat.TRANSLUCENT
+                );
+
+            wm.addView(root, wp);
+            overlay = root;
+
+            cancel.setOnClickListener(
+                v -> closeCrop()
+            );
+
+            save.setOnClickListener(v -> {
+                Rect rect = crop.getSelection();
+
+                if (rect == null) {
+                    Toast.makeText(
+                        this,
+                        "Hãy kéo tay chọn vùng cần cắt",
+                        Toast.LENGTH_SHORT
+                    ).show();
+                    return;
                 }
 
-                if (captured) {
-                    releaseProjection();
-                    handler.post(() -> showCropOverlay());
-                }
-            }, handler);
+                try {
+                    Bitmap result =
+                        Bitmap.createBitmap(
+                            screenshot,
+                            rect.left,
+                            rect.top,
+                            rect.width(),
+                            rect.height()
+                        );
 
-            display = projection.createVirtualDisplay(
-                "KhoanhChup",
-                width, height, density,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                reader.getSurface(),
-                null, handler);
+                    saveImage(result);
+                    result.recycle();
 
-            handler.postDelayed(() -> {
-                if (!captured) {
-                    showError("Khong nhan duoc anh chup");
-                    finishCapture();
+                    Toast.makeText(
+                        this,
+                        "Đã lưu vào Pictures/KhoanhChup",
+                        Toast.LENGTH_LONG
+                    ).show();
+
+                    closeCrop();
+
+                } catch (Exception e) {
+                    error(e.getMessage());
                 }
-            }, 5000);
+            });
 
         } catch (Exception e) {
-            showError(e.getMessage());
-            finishCapture();
+            error(e.getMessage());
+            closeCrop();
         }
     }
 
-    private void releaseProjection() {
+    private void closeCrop() {
+        if (overlay != null) {
+            try {
+                wm.removeView(overlay);
+            } catch (Exception ignored) {}
+
+            overlay = null;
+        }
+
+        if (screenshot != null) {
+            screenshot.recycle();
+            screenshot = null;
+        }
+
+        showCat();
+    }
+
+    private void showCat() {
+        if (destroyed) return;
+
+        Intent show = new Intent(
+            this, FloatingCaptureService.class
+        );
+
+        show.setAction("SHOW");
+
+        try {
+            startService(show);
+        } catch (Exception ignored) {}
+    }
+
+    private void saveImage(Bitmap bitmap)
+        throws Exception {
+
+        ContentValues values = new ContentValues();
+
+        values.put(
+            MediaStore.Images.Media.DISPLAY_NAME,
+            "KhoanhChup_" +
+                System.currentTimeMillis() + ".png"
+        );
+
+        values.put(
+            MediaStore.Images.Media.MIME_TYPE,
+            "image/png"
+        );
+
+        values.put(
+            MediaStore.Images.Media.RELATIVE_PATH,
+            "Pictures/KhoanhChup"
+        );
+
+        values.put(
+            MediaStore.Images.Media.IS_PENDING,
+            1
+        );
+
+        android.net.Uri uri =
+            getContentResolver().insert(
+                MediaStore.Images.Media
+                    .EXTERNAL_CONTENT_URI,
+                values
+            );
+
+        if (uri == null) {
+            throw new Exception(
+                "Không tạo được file ảnh"
+            );
+        }
+
+        boolean success = false;
+
+        try {
+            try (OutputStream out =
+                getContentResolver()
+                    .openOutputStream(uri)) {
+
+                if (out == null ||
+                    !bitmap.compress(
+                        Bitmap.CompressFormat.PNG,
+                        100,
+                        out
+                    )) {
+                    throw new Exception(
+                        "Không lưu được ảnh"
+                    );
+                }
+            }
+
+            values.clear();
+
+            values.put(
+                MediaStore.Images.Media.IS_PENDING,
+                0
+            );
+
+            getContentResolver().update(
+                uri, values, null, null
+            );
+
+            success = true;
+
+        } finally {
+            if (!success) {
+                getContentResolver().delete(
+                    uri, null, null
+                );
+            }
+        }
+    }
+
+    private void error(String message) {
+        handler.post(() ->
+            Toast.makeText(
+                this,
+                "Lỗi chụp: " + message,
+                Toast.LENGTH_LONG
+            ).show()
+        );
+    }
+
+    @Override
+    public void onDestroy() {
+        destroyed = true;
+        active = false;
+        pending = false;
+
+        handler.removeCallbacksAndMessages(null);
+
+        if (overlay != null) {
+            try {
+                wm.removeView(overlay);
+            } catch (Exception ignored) {}
+            overlay = null;
+        }
+
         if (display != null) {
             display.release();
             display = null;
@@ -232,197 +569,6 @@ public class ScreenCaptureService extends Service {
             projection = null;
             old.stop();
         }
-    }
-
-    private void showCropOverlay() {
-        if (screenshot == null) {
-            finishCapture();
-            return;
-        }
-
-        try {
-            FrameLayout root = new FrameLayout(this);
-            root.setBackgroundColor(Color.BLACK);
-
-            CropView crop = new CropView(this, screenshot);
-            root.addView(crop);
-
-            LinearLayout controls = new LinearLayout(this);
-            controls.setOrientation(
-                LinearLayout.HORIZONTAL);
-            controls.setGravity(Gravity.CENTER);
-            controls.setPadding(8, 8, 8, 8);
-            controls.setBackgroundColor(0xDD202020);
-
-            Button cancel = new Button(this);
-            cancel.setText("HUY");
-            controls.addView(cancel);
-
-            Button save = new Button(this);
-            save.setText("CAT VA LUU");
-            controls.addView(save);
-
-            FrameLayout.LayoutParams buttons =
-                new FrameLayout.LayoutParams(
-                    -1, -2, Gravity.BOTTOM);
-
-            root.addView(controls, buttons);
-
-            WindowManager.LayoutParams params =
-                new WindowManager.LayoutParams(
-                    -1, -1,
-                    WindowManager.LayoutParams
-                        .TYPE_APPLICATION_OVERLAY,
-                    WindowManager.LayoutParams
-                        .FLAG_LAYOUT_IN_SCREEN,
-                    PixelFormat.TRANSLUCENT);
-
-            wm.addView(root, params);
-            cropOverlay = root;
-
-            cancel.setOnClickListener(v ->
-                finishCapture());
-
-            save.setOnClickListener(v -> {
-                Rect selection = crop.getSelection();
-
-                if (selection == null) {
-                    Toast.makeText(this,
-                        "Hay keo tay chon vung can cat",
-                        Toast.LENGTH_SHORT).show();
-                    return;
-                }
-
-                try {
-                    Bitmap result = Bitmap.createBitmap(
-                        screenshot,
-                        selection.left,
-                        selection.top,
-                        selection.width(),
-                        selection.height());
-
-                    saveImage(result);
-                    result.recycle();
-
-                    Toast.makeText(this,
-                        "Da luu anh vao KhoanhChup",
-                        Toast.LENGTH_LONG).show();
-
-                    finishCapture();
-
-                } catch (Exception e) {
-                    showError(e.getMessage());
-                }
-            });
-
-        } catch (Exception e) {
-            showError(e.getMessage());
-            finishCapture();
-        }
-    }
-
-    private void saveImage(Bitmap bitmap)
-        throws Exception {
-
-        ContentValues values = new ContentValues();
-
-        values.put(
-            MediaStore.Images.Media.DISPLAY_NAME,
-            "KhoanhChup_" +
-                System.currentTimeMillis() + ".png");
-
-        values.put(
-            MediaStore.Images.Media.MIME_TYPE,
-            "image/png");
-
-        values.put(
-            MediaStore.Images.Media.RELATIVE_PATH,
-            "Pictures/KhoanhChup");
-
-        values.put(
-            MediaStore.Images.Media.IS_PENDING, 1);
-
-        android.net.Uri uri =
-            getContentResolver().insert(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                values);
-
-        if (uri == null) {
-            throw new Exception("Khong tao duoc tep anh");
-        }
-
-        boolean success = false;
-
-        try {
-            try (OutputStream out =
-                getContentResolver().openOutputStream(uri)) {
-
-                if (out == null ||
-                    !bitmap.compress(
-                        Bitmap.CompressFormat.PNG, 100, out)) {
-                    throw new Exception("Khong ghi duoc anh");
-                }
-            }
-
-            values.clear();
-            values.put(
-                MediaStore.Images.Media.IS_PENDING, 0);
-
-            getContentResolver().update(
-                uri, values, null, null);
-
-            success = true;
-
-        } finally {
-            if (!success) {
-                getContentResolver().delete(
-                    uri, null, null);
-            }
-        }
-    }
-
-    private void showError(String message) {
-        Toast.makeText(this,
-            "Loi chup: " + message,
-            Toast.LENGTH_LONG).show();
-    }
-
-    private void finishCapture() {
-        if (cropOverlay != null && wm != null) {
-            try {
-                wm.removeView(cropOverlay);
-            } catch (Exception ignored) {}
-            cropOverlay = null;
-        }
-
-        releaseProjection();
-
-        if (screenshot != null) {
-            screenshot.recycle();
-            screenshot = null;
-        }
-
-        Intent show = new Intent(
-            this, FloatingCaptureService.class);
-        show.setAction("SHOW");
-
-        try {
-            startService(show);
-        } catch (Exception ignored) {}
-
-        stopSelf();
-    }
-
-    @Override
-    public void onDestroy() {
-        if (cropOverlay != null && wm != null) {
-            try {
-                wm.removeView(cropOverlay);
-            } catch (Exception ignored) {}
-            cropOverlay = null;
-        }
-
-        releaseProjection();
 
         if (screenshot != null) {
             screenshot.recycle();
@@ -439,27 +585,32 @@ public class ScreenCaptureService extends Service {
 
     private static class CropView extends View {
 
-        private Bitmap image;
-        private Paint paint = new Paint(3);
-        private float startX, startY, endX, endY;
+        private final Bitmap image;
+        private final Paint paint = new Paint(3);
+
+        private float x1, y1, x2, y2;
         private boolean selected = false;
 
-        public CropView(Context context, Bitmap bitmap) {
+        CropView(Context context, Bitmap bitmap) {
             super(context);
             image = bitmap;
-            setBackgroundColor(Color.BLACK);
         }
 
         @Override
         protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
 
-            if (image == null) return;
+            paint.setColor(Color.WHITE);
+            paint.setStyle(Paint.Style.FILL);
 
             canvas.drawBitmap(
-                image, null,
-                new Rect(0, 0, getWidth(), getHeight()),
-                paint);
+                image,
+                null,
+                new Rect(
+                    0, 0, getWidth(), getHeight()
+                ),
+                paint
+            );
 
             if (selected) {
                 paint.setColor(Color.GREEN);
@@ -467,79 +618,103 @@ public class ScreenCaptureService extends Service {
                 paint.setStyle(Paint.Style.STROKE);
 
                 canvas.drawRect(
-                    startX, startY, endX, endY, paint);
+                    x1, y1, x2, y2, paint
+                );
 
                 paint.setStyle(Paint.Style.FILL);
-                paint.setColor(Color.WHITE);
             }
         }
 
         @Override
         public boolean onTouchEvent(
-            android.view.MotionEvent event) {
-
+            MotionEvent event
+        ) {
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
-                    startX = event.getX();
-                    startY = event.getY();
-                    endX = startX;
-                    endY = startY;
+                    x1 = x2 = event.getX();
+                    y1 = y2 = event.getY();
                     selected = true;
                     invalidate();
                     return true;
 
                 case MotionEvent.ACTION_MOVE:
                 case MotionEvent.ACTION_UP:
-                    endX = event.getX();
-                    endY = event.getY();
+                    x2 = event.getX();
+                    y2 = event.getY();
                     invalidate();
                     return true;
             }
+
             return true;
         }
 
-        public Rect getSelection() {
-            if (!selected || image == null ||
-                getWidth() == 0 || getHeight() == 0) {
+        Rect getSelection() {
+            if (!selected ||
+                getWidth() == 0 ||
+                getHeight() == 0) {
                 return null;
             }
 
-            float scaleX =
-                (float) image.getWidth() / getWidth();
+            float sx =
+                (float) image.getWidth() /
+                getWidth();
 
-            float scaleY =
-                (float) image.getHeight() / getHeight();
+            float sy =
+                (float) image.getHeight() /
+                getHeight();
 
             int left = (int)(
-                Math.min(startX, endX) * scaleX);
+                Math.min(x1, x2) * sx
+            );
 
             int top = (int)(
-                Math.min(startY, endY) * scaleY);
+                Math.min(y1, y2) * sy
+            );
 
             int right = (int)(
-                Math.max(startX, endX) * scaleX);
+                Math.max(x1, x2) * sx
+            );
 
             int bottom = (int)(
-                Math.max(startY, endY) * scaleY);
+                Math.max(y1, y2) * sy
+            );
 
-            left = Math.max(0, Math.min(
-                left, image.getWidth() - 1));
+            left = Math.max(
+                0,
+                Math.min(
+                    left, image.getWidth() - 1
+                )
+            );
 
-            top = Math.max(0, Math.min(
-                top, image.getHeight() - 1));
+            top = Math.max(
+                0,
+                Math.min(
+                    top, image.getHeight() - 1
+                )
+            );
 
-            right = Math.max(left + 1, Math.min(
-                right, image.getWidth()));
+            right = Math.max(
+                left + 1,
+                Math.min(
+                    right, image.getWidth()
+                )
+            );
 
-            bottom = Math.max(top + 1, Math.min(
-                bottom, image.getHeight()));
+            bottom = Math.max(
+                top + 1,
+                Math.min(
+                    bottom, image.getHeight()
+                )
+            );
 
             if (right - left < 10 ||
                 bottom - top < 10) {
                 return null;
             }
 
-            return new Rect(left, top, right, bottom);
+            return new Rect(
+                left, top, right, bottom
+            );
         }
     }
-                }
+}
