@@ -26,20 +26,19 @@ public class FloatingCaptureService extends Service {
     private boolean dragging = false;
     private boolean hidden = false;
 
-    private long lastTouch;
     private long nextChange;
     private long sleepUntil;
 
-    private float speedX = 0;
-    private float speedY = 0;
+    private float speedX;
+    private float speedY;
     private float posX;
     private float posY;
 
     private int screenWidth;
     private int screenHeight;
 
-    private final int CAT_WIDTH_DP = 78;
-    private final int CAT_HEIGHT_DP = 88;
+    private static final int CAT_WIDTH = 78;
+    private static final int CAT_HEIGHT = 88;
 
     private final Runnable animator = new Runnable() {
         @Override
@@ -70,7 +69,7 @@ public class FloatingCaptureService extends Service {
             nm.createNotificationChannel(
                 new NotificationChannel(
                     CHANNEL,
-                    "Mèo V7 tự đi lại",
+                    "Mèo nổi V7",
                     NotificationManager.IMPORTANCE_LOW
                 )
             );
@@ -91,19 +90,20 @@ public class FloatingCaptureService extends Service {
             return START_STICKY;
         }
 
-        if ("SHOW".equals(action)) {
-            showHiddenCat();
+        if ("SHOW".equals(action) && cat != null) {
+            hidden = false;
+            cat.setVisibility(View.VISIBLE);
+            chooseMovement();
+            return START_STICKY;
+        }
+
+        if (cat != null) {
             return START_STICKY;
         }
 
         if (!Settings.canDrawOverlays(this)) {
             stopSelf();
             return START_NOT_STICKY;
-        }
-
-        if (cat != null) {
-            showHiddenCat();
-            return START_STICKY;
         }
 
         Intent open =
@@ -132,7 +132,7 @@ public class FloatingCaptureService extends Service {
                 android.R.drawable.ic_menu_camera
             )
             .setContentTitle("Khoanh Chụp V7")
-            .setContentText("Mèo đang đi lại trên màn hình")
+            .setContentText("Mèo đang đi lại")
             .setContentIntent(pi)
             .setOngoing(true)
             .build();
@@ -183,13 +183,13 @@ public class FloatingCaptureService extends Service {
 
     private int maxX() {
         return Math.max(
-            0, screenWidth - dp(CAT_WIDTH_DP)
+            0, screenWidth - dp(CAT_WIDTH)
         );
     }
 
     private int maxY() {
         return Math.max(
-            0, screenHeight - dp(CAT_HEIGHT_DP)
+            0, screenHeight - dp(CAT_HEIGHT)
                 - dp(35)
         );
     }
@@ -197,22 +197,20 @@ public class FloatingCaptureService extends Service {
     private float clamp(
         float value, float min, float max
     ) {
-        return Math.max(min, Math.min(max, value));
+        return Math.max(
+            min, Math.min(max, value)
+        );
     }
 
     private void createCat() {
         if (cat != null) return;
 
-        destroyed = false;
         hidden = false;
-
-        lastTouch = System.currentTimeMillis();
-
         cat = new CatImage(this);
 
         params = new WindowManager.LayoutParams(
-            dp(CAT_WIDTH_DP),
-            dp(CAT_HEIGHT_DP),
+            dp(CAT_WIDTH),
+            dp(CAT_HEIGHT),
             WindowManager.LayoutParams
                 .TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams
@@ -227,8 +225,12 @@ public class FloatingCaptureService extends Service {
         posX = maxX() - dp(12);
         posY = dp(190);
 
-        params.x = (int) clamp(posX, 0, maxX());
-        params.y = (int) clamp(posY, 0, maxY());
+        params.x = Math.round(
+            clamp(posX, 0, maxX())
+        );
+        params.y = Math.round(
+            clamp(posY, 0, maxY())
+        );
 
         posX = params.x;
         posY = params.y;
@@ -256,10 +258,9 @@ public class FloatingCaptureService extends Service {
                             startX = params.x;
                             startY = params.y;
 
-                            lastTouch =
+                            cat.tapTime =
                                 System.currentTimeMillis();
 
-                            cat.tapTime = lastTouch;
                             return true;
 
                         case MotionEvent.ACTION_MOVE:
@@ -290,19 +291,15 @@ public class FloatingCaptureService extends Service {
                                 moveView();
                             }
 
-                            lastTouch =
-                                System.currentTimeMillis();
-
                             return true;
 
                         case MotionEvent.ACTION_UP:
                             dragging = false;
 
-                            lastTouch =
-                                System.currentTimeMillis();
-
                             if (!moved) {
-                                cat.tapTime = lastTouch;
+                                cat.tapTime =
+                                    System.currentTimeMillis();
+
                                 handler.postDelayed(
                                     () -> {
                                         if (!destroyed) {
@@ -343,18 +340,25 @@ public class FloatingCaptureService extends Service {
         if (choice == 0) {
             speedX = 0;
             speedY = 0;
+
             sleepUntil = now + 2500
                 + random.nextInt(4500);
+
         } else {
-            speedX = (random.nextBoolean() ? 1 : -1)
-                * (0.7f + random.nextFloat() * 1.1f)
-                * getResources()
+            float density =
+                getResources()
                     .getDisplayMetrics().density;
 
-            speedY = (random.nextFloat() - 0.5f)
+            speedX =
+                (random.nextBoolean() ? 1 : -1)
+                * (0.7f +
+                    random.nextFloat() * 1.1f)
+                * density;
+
+            speedY =
+                (random.nextFloat() - 0.5f)
                 * 0.6f
-                * getResources()
-                    .getDisplayMetrics().density;
+                * density;
 
             sleepUntil = 0;
         }
@@ -372,9 +376,7 @@ public class FloatingCaptureService extends Service {
             chooseMovement();
         }
 
-        if (now < sleepUntil) {
-            return;
-        }
+        if (now < sleepUntil) return;
 
         posX += speedX;
         posY += speedY;
@@ -423,38 +425,53 @@ public class FloatingCaptureService extends Service {
         }
     }
 
-    private void showHiddenCat() {
-        hidden = false;
-
-        if (cat != null) {
-            cat.setVisibility(View.VISIBLE);
-            chooseMovement();
-        }
-    }
-
     private void openCapture() {
         if (destroyed) return;
 
-        Intent open =
-            new Intent(this, MainActivity.class);
+        if (ScreenCaptureService.isActive()) {
 
-        open.setAction(
-            "com.namhailua.khoanhchup.CAPTURE"
-        );
+            Intent snap = new Intent(
+                this, ScreenCaptureService.class
+            );
 
-        open.addFlags(
-            Intent.FLAG_ACTIVITY_NEW_TASK |
-            Intent.FLAG_ACTIVITY_SINGLE_TOP
-        );
+            snap.setAction(
+                ScreenCaptureService.ACTION_SNAP
+            );
 
-        try {
-            startActivity(open);
-        } catch (Exception e) {
-            Toast.makeText(
-                this,
-                "Không mở được chức năng chụp",
-                Toast.LENGTH_SHORT
-            ).show();
+            try {
+                startService(snap);
+            } catch (Exception e) {
+                Toast.makeText(
+                    this,
+                    "Lỗi chụp: " + e.getMessage(),
+                    Toast.LENGTH_SHORT
+                ).show();
+            }
+
+        } else {
+
+            Intent open = new Intent(
+                this, MainActivity.class
+            );
+
+            open.setAction(
+                "com.namhailua.khoanhchup.CAPTURE"
+            );
+
+            open.addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK |
+                Intent.FLAG_ACTIVITY_SINGLE_TOP
+            );
+
+            try {
+                startActivity(open);
+            } catch (Exception e) {
+                Toast.makeText(
+                    this,
+                    "Hãy mở ứng dụng để cấp quyền chụp",
+                    Toast.LENGTH_SHORT
+                ).show();
+            }
         }
     }
 
