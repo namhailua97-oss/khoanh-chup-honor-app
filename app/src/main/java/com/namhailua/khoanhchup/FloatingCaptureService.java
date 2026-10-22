@@ -11,9 +11,9 @@ import java.util.Random;
 
 public class FloatingCaptureService extends Service {
 
-    private static final String CHANNEL = "cat_v8";
-    private static final int CAT_W = 84;
-    private static final int CAT_H = 94;
+    private static final String CHANNEL = "cat_v9";
+    private static final int CW = 82;
+    private static final int CH = 100;
 
     private WindowManager wm;
     private WindowManager.LayoutParams params;
@@ -21,33 +21,31 @@ public class FloatingCaptureService extends Service {
 
     private final Handler handler =
         new Handler(Looper.getMainLooper());
-
     private final Random random = new Random();
 
     private boolean destroyed = false;
     private boolean hidden = false;
     private boolean dragging = false;
 
-    private float posX, posY;
-    private float direction = -1;
-    private float speed = 0;
-    private float walkPhase = 0;
+    private float x, y;
+    private float direction = 1;
+    private float speed;
+    private float phase;
+    private float elapsed;
 
     private int screenW, screenH;
-    private long nextAction = 0;
-    private long actionEnd = 0;
-    private long lastFrame = 0;
-
-    // 0: đi, 1: nghỉ, 2: vẫy tay, 3: ngủ
     private int state = 0;
+    private long actionEnd;
+    private long lastFrame;
 
+    // 0 di, 1 ngoi, 2 vay tay, 3 ngu, 4 nhay
     private final Runnable animator = new Runnable() {
         @Override
         public void run() {
             if (destroyed) return;
 
             if (cat != null && !hidden) {
-                updateAnimation();
+                update();
                 cat.invalidate();
             }
 
@@ -70,7 +68,7 @@ public class FloatingCaptureService extends Service {
             nm.createNotificationChannel(
                 new NotificationChannel(
                     CHANNEL,
-                    "Mèo hoạt hình V8",
+                    "Meo noi V9",
                     NotificationManager.IMPORTANCE_LOW
                 )
             );
@@ -88,9 +86,8 @@ public class FloatingCaptureService extends Service {
 
         if ("HIDE".equals(action)) {
             hidden = true;
-            if (cat != null) {
+            if (cat != null)
                 cat.setVisibility(View.GONE);
-            }
             return START_STICKY;
         }
 
@@ -114,7 +111,7 @@ public class FloatingCaptureService extends Service {
         } catch (Exception e) {
             Toast.makeText(
                 this,
-                "Lỗi mèo: " + e.getMessage(),
+                "Loi meo: " + e.getMessage(),
                 Toast.LENGTH_LONG
             ).show();
             stopSelf();
@@ -142,8 +139,8 @@ public class FloatingCaptureService extends Service {
             .setSmallIcon(
                 android.R.drawable.ic_menu_camera
             )
-            .setContentTitle("Khoanh Chụp V8")
-            .setContentText("Mèo đang đi và vẫy tay")
+            .setContentTitle("Khoanh Chup V9")
+            .setContentText("Meo dang vui choi")
             .setContentIntent(pi)
             .setOngoing(true)
             .build();
@@ -174,7 +171,7 @@ public class FloatingCaptureService extends Service {
         screenH = dm.heightPixels;
     }
 
-    private float limit(float v, float max) {
+    private float clamp(float v, float max) {
         return Math.max(0, Math.min(max, v));
     }
 
@@ -182,8 +179,8 @@ public class FloatingCaptureService extends Service {
         cat = new CatView(this);
 
         params = new WindowManager.LayoutParams(
-            (int) dp(CAT_W),
-            (int) dp(CAT_H),
+            (int) dp(CW),
+            (int) dp(CH),
             WindowManager.LayoutParams
                 .TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams
@@ -195,10 +192,11 @@ public class FloatingCaptureService extends Service {
 
         params.gravity = Gravity.TOP | Gravity.START;
 
-        posX = Math.max(0, screenW - dp(110));
-        posY = dp(210);
+        x = Math.max(0, screenW - dp(110));
+        y = dp(210);
 
-        moveCat();
+        params.x = (int) x;
+        params.y = (int) y;
 
         cat.setOnTouchListener(new View.OnTouchListener() {
             float downX, downY;
@@ -206,17 +204,15 @@ public class FloatingCaptureService extends Service {
             boolean moved;
 
             @Override
-            public boolean onTouch(
-                View v, MotionEvent e
-            ) {
+            public boolean onTouch(View v, MotionEvent e) {
                 switch (e.getActionMasked()) {
                     case MotionEvent.ACTION_DOWN:
                         dragging = true;
                         moved = false;
                         downX = e.getRawX();
                         downY = e.getRawY();
-                        startX = posX;
-                        startY = posY;
+                        startX = x;
+                        startY = y;
                         return true;
 
                     case MotionEvent.ACTION_MOVE:
@@ -229,13 +225,13 @@ public class FloatingCaptureService extends Service {
                         }
 
                         if (moved) {
-                            posX = limit(
+                            x = clamp(
                                 startX + dx,
-                                screenW - dp(CAT_W)
+                                screenW - dp(CW)
                             );
-                            posY = limit(
+                            y = clamp(
                                 startY + dy,
-                                screenH - dp(CAT_H + 35)
+                                screenH - dp(CH + 35)
                             );
                             moveCat();
                         }
@@ -262,83 +258,83 @@ public class FloatingCaptureService extends Service {
         wm.addView(cat, params);
 
         chooseAction();
+        lastFrame = SystemClock.uptimeMillis();
         handler.post(animator);
     }
 
     private void chooseAction() {
         long now = SystemClock.uptimeMillis();
-        int choice = random.nextInt(10);
+        int n = random.nextInt(12);
 
-        if (choice < 6) {
+        if (n < 6) {
             state = 0;
             direction = random.nextBoolean() ? 1 : -1;
-            speed = dp(20 + random.nextInt(20));
+            speed = dp(16 + random.nextInt(18));
             actionEnd = now + 2500
-                + random.nextInt(3500);
-        } else if (choice < 8) {
+                + random.nextInt(3000);
+        } else if (n < 8) {
             state = 1;
             speed = 0;
-            actionEnd = now + 1200
-                + random.nextInt(1800);
-        } else if (choice == 8) {
+            actionEnd = now + 1800;
+        } else if (n < 10) {
             state = 2;
             speed = 0;
-            actionEnd = now + 2600;
-        } else {
+            actionEnd = now + 2200;
+        } else if (n == 10) {
             state = 3;
             speed = 0;
             actionEnd = now + 3500;
+        } else {
+            state = 4;
+            speed = 0;
+            actionEnd = now + 1600;
         }
 
-        nextAction = actionEnd;
+        elapsed = 0;
     }
 
-    private void updateAnimation() {
-        if (dragging) return;
-
+    private void update() {
         long now = SystemClock.uptimeMillis();
 
-        if (lastFrame == 0) lastFrame = now;
-
         float dt = Math.min(
-            0.08f,
+            0.06f,
             (now - lastFrame) / 1000f
         );
-
         lastFrame = now;
 
-        if (now >= nextAction) {
+        if (dragging) return;
+
+        elapsed += dt;
+        phase += dt * (state == 0 ? 11 : 5);
+
+        if (now >= actionEnd)
             chooseAction();
-        }
 
         if (state == 0) {
-            walkPhase += dt * 12f;
-            posX += direction * speed * dt;
+            x += direction * speed * dt;
 
             float maxX =
-                Math.max(0, screenW - dp(CAT_W));
+                Math.max(0, screenW - dp(CW));
 
-            if (posX <= 0) {
-                posX = 0;
+            if (x <= 0) {
+                x = 0;
                 direction = 1;
             }
 
-            if (posX >= maxX) {
-                posX = maxX;
+            if (x >= maxX) {
+                x = maxX;
                 direction = -1;
             }
 
             moveCat();
-        } else if (state == 2) {
-            walkPhase += dt * 8f;
         }
     }
 
     private void moveCat() {
         if (params == null) return;
 
-        params.x = Math.round(posX);
-        params.y = Math.round(posY);
+        params.x = Math.round(x);
+        params.y = Math.round(y);
 
         if (cat != null && cat.getParent() != null) {
             try {
@@ -348,44 +344,27 @@ public class FloatingCaptureService extends Service {
     }
 
     private void openCapture() {
-        if (ScreenCaptureService.isActive()) {
-            Intent snap = new Intent(
-                this, ScreenCaptureService.class
-            );
-            snap.setAction(
-                ScreenCaptureService.ACTION_SNAP
-            );
-
-            try {
-                startService(snap);
-            } catch (Exception e) {
-                Toast.makeText(
-                    this,
-                    "Không chụp được màn hình",
-                    Toast.LENGTH_SHORT
-                ).show();
-            }
-        } else {
+        try {
             Intent open =
                 new Intent(this, MainActivity.class);
 
             open.setAction(
                 "com.namhailua.khoanhchup.CAPTURE"
             );
+
             open.addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK |
                 Intent.FLAG_ACTIVITY_SINGLE_TOP
             );
 
-            try {
-                startActivity(open);
-            } catch (Exception e) {
-                Toast.makeText(
-                    this,
-                    "Mở ứng dụng để cấp quyền chụp",
-                    Toast.LENGTH_SHORT
-                ).show();
-            }
+            startActivity(open);
+
+        } catch (Exception e) {
+            Toast.makeText(
+                this,
+                "Khong mo duoc khoanh chup",
+                Toast.LENGTH_SHORT
+            ).show();
         }
     }
 
@@ -394,41 +373,50 @@ public class FloatingCaptureService extends Service {
         private final Paint p =
             new Paint(Paint.ANTI_ALIAS_FLAG);
 
-        private final int ORANGE =
-            Color.rgb(244, 155, 75);
-
-        private final int CREAM =
-            Color.rgb(255, 243, 225);
-
-        private final int DARK =
-            Color.rgb(85, 57, 49);
+        private final int ORANGE = 0xFFFFA44E;
+        private final int LIGHT = 0xFFFFCA83;
+        private final int CREAM = 0xFFFFF2DE;
+        private final int DARK = 0xFF513B35;
+        private final int PINK = 0xFFFFA6B4;
 
         CatView(Context context) {
             super(context);
-            setLayerType(
-                View.LAYER_TYPE_SOFTWARE, null
-            );
+            setLayerType(View.LAYER_TYPE_SOFTWARE, null);
         }
 
         private void oval(
-            Canvas c,
-            float l, float t,
-            float r, float b,
-            int color
+            Canvas c, float l, float t,
+            float r, float b, int color
         ) {
+            p.setShader(null);
             p.setColor(color);
             p.setStyle(Paint.Style.FILL);
             c.drawOval(l, t, r, b, p);
         }
 
         private void circle(
-            Canvas c,
-            float x, float y,
+            Canvas c, float x, float y,
             float radius, int color
         ) {
+            p.setShader(null);
             p.setColor(color);
             p.setStyle(Paint.Style.FILL);
             c.drawCircle(x, y, radius, p);
+        }
+
+        private void glossyOval(
+            Canvas c, float l, float t,
+            float r, float b,
+            int topColor, int bottomColor
+        ) {
+            p.setStyle(Paint.Style.FILL);
+            p.setShader(new LinearGradient(
+                l, t, r, b,
+                topColor, bottomColor,
+                Shader.TileMode.CLAMP
+            ));
+            c.drawOval(l, t, r, b, p);
+            p.setShader(null);
         }
 
         private void line(
@@ -437,6 +425,7 @@ public class FloatingCaptureService extends Service {
             float x2, float y2,
             float width, int color
         ) {
+            p.setShader(null);
             p.setColor(color);
             p.setStyle(Paint.Style.STROKE);
             p.setStrokeWidth(width);
@@ -445,249 +434,226 @@ public class FloatingCaptureService extends Service {
             p.setStyle(Paint.Style.FILL);
         }
 
-        private void ear(
-            Canvas c,
-            float x, float y,
-            boolean left
-        ) {
-            Path path = new Path();
-
-            float sign = left ? -1 : 1;
-
-            path.moveTo(x - 9, y + 12);
-            path.lineTo(x + sign * 7, y - 12);
-            path.lineTo(x + 12, y + 10);
-            path.close();
-
-            p.setColor(ORANGE);
-            c.drawPath(path, p);
-
-            circle(
-                c, x + sign * 2, y + 5,
-                4, Color.rgb(255, 174, 181)
-            );
-        }
-
         private void leg(
             Canvas c,
-            float hipX,
-            float hipY,
-            float phase,
-            boolean back
+            float hipX, float hipY,
+            float offset, boolean back
         ) {
-            float swing =
-                state == 0
-                    ? (float) Math.sin(phase) * 8
-                    : 0;
+            float swing = state == 0
+                ? (float) Math.sin(phase + offset) * 7
+                : 0;
 
-            float lift =
-                state == 0
-                    ? Math.max(
-                        0,
-                        (float) Math.cos(phase)
-                    ) * 7
-                    : 0;
+            float lift = state == 0
+                ? Math.max(
+                    0,
+                    (float) Math.cos(phase + offset)
+                ) * 6
+                : 0;
 
-            float footX = hipX + swing;
-            float footY = 75 - lift;
+            float fx = hipX + swing;
+            float fy = 78 - lift;
 
-            int color = back
-                ? Color.rgb(209, 119, 62)
-                : ORANGE;
+            int color = back ? 0xFFD98A4A : ORANGE;
+
+            line(
+                c, hipX, hipY,
+                hipX + swing * .5f, 66,
+                10, color
+            );
 
             line(
                 c,
-                hipX, hipY,
-                hipX + swing * .45f, 61,
+                hipX + swing * .5f, 66,
+                fx, fy,
                 8, color
             );
 
-            line(
+            glossyOval(
                 c,
-                hipX + swing * .45f, 61,
-                footX, footY,
-                7, color
+                fx - 6, fy - 4,
+                fx + 7, fy + 3,
+                CREAM, 0xFFE5D4C2
             );
+        }
+
+        private void ear(
+            Canvas c, float x,
+            float y, boolean left
+        ) {
+            Path path = new Path();
+
+            if (left) {
+                path.moveTo(x - 13, y + 11);
+                path.lineTo(x - 9, y - 14);
+                path.lineTo(x + 11, y + 6);
+            } else {
+                path.moveTo(x - 11, y + 6);
+                path.lineTo(x + 9, y - 14);
+                path.lineTo(x + 13, y + 11);
+            }
+
+            path.close();
+
+            p.setColor(ORANGE);
+            p.setStyle(Paint.Style.FILL);
+            c.drawPath(path, p);
 
             oval(
-                c,
-                footX - 5, footY - 3,
-                footX + 7, footY + 3,
-                CREAM
+                c, x - 5, y - 3,
+                x + 5, y + 9, PINK
             );
         }
 
         @Override
-        protected void onDraw(Canvas original) {
-            super.onDraw(original);
-
-            Canvas c = original;
+        protected void onDraw(Canvas c) {
+            super.onDraw(c);
 
             c.save();
-
-            float sx = getWidth() / 84f;
-            float sy = getHeight() / 94f;
-
-            c.scale(sx, sy);
-
-            // Quay hướng đi
-            if (direction < 0) {
-                c.scale(-1, 1, 42, 47);
-            }
-
-            float bob =
-                state == 0
-                    ? (float) Math.abs(
-                        Math.sin(walkPhase)
-                    ) * 2.5f
-                    : 0;
-
-            c.translate(0, -bob);
-
-            // Bóng dưới chân
-            oval(
-                c, 15, 78, 75, 84,
-                0x33000000
+            c.scale(
+                getWidth() / 82f,
+                getHeight() / 100f
             );
 
-            // Đuôi cong, đung đưa độc lập
+            if (direction < 0)
+                c.scale(-1, 1, 41, 50);
+
+            float bob = state == 0
+                ? (float) Math.abs(
+                    Math.sin(phase)
+                ) * 2.5f
+                : 0;
+
+            float jump = state == 4
+                ? (float) Math.abs(
+                    Math.sin(elapsed * 7)
+                ) * 13
+                : 0;
+
+            oval(
+                c, 12, 82,
+                73, 89, 0x33000000
+            );
+
+            c.translate(0, -bob - jump);
+
             float tail =
                 (float) Math.sin(
-                    SystemClock.uptimeMillis() / 280.0
+                    SystemClock.uptimeMillis() / 260.0
                 ) * 8;
+
+            Path tailPath = new Path();
+            tailPath.moveTo(65, 51);
+            tailPath.cubicTo(
+                88, 43,
+                72 + tail, 12,
+                76 + tail, 20
+            );
 
             p.setColor(ORANGE);
             p.setStyle(Paint.Style.STROKE);
-            p.setStrokeWidth(9);
+            p.setStrokeWidth(10);
             p.setStrokeCap(Paint.Cap.ROUND);
-
-            Path tailPath = new Path();
-            tailPath.moveTo(66, 48);
-            tailPath.cubicTo(
-                89, 39,
-                74 + tail, 15,
-                78 + tail, 22
-            );
-
             c.drawPath(tailPath, p);
             p.setStyle(Paint.Style.FILL);
 
-            // Hai chân phía sau
-            leg(c, 54, 51, walkPhase + 3.14f, true);
-            leg(c, 31, 51, walkPhase, true);
+            leg(c, 55, 53, 3.14f, true);
+            leg(c, 30, 53, 0, true);
 
-            // Thân mèo
-            oval(
-                c, 20, 34, 69, 66,
-                ORANGE
+            glossyOval(
+                c, 18, 35, 69, 68,
+                LIGHT, 0xFFD9823F
             );
 
-            oval(
-                c, 24, 41, 62, 62,
-                CREAM
+            glossyOval(
+                c, 25, 43, 61, 65,
+                CREAM, 0xFFE8D9C6
             );
 
-            // Chân phía trước
-            leg(c, 29, 53, walkPhase + 3.14f, false);
+            leg(c, 29, 54, 3.14f, false);
 
             if (state == 2) {
-                // Chân trước giơ lên vẫy
                 float wave =
-                    (float) Math.sin(walkPhase * 2) * 9;
+                    (float) Math.sin(phase * 2) * 8;
 
                 line(
-                    c,
-                    55, 49,
-                    70 + wave, 26,
-                    9, ORANGE
+                    c, 55, 51,
+                    69 + wave, 28,
+                    10, ORANGE
                 );
 
                 circle(
-                    c,
-                    70 + wave, 25,
-                    6, CREAM
+                    c, 69 + wave, 27,
+                    7, CREAM
                 );
 
-                // Đệm chân
                 circle(
-                    c,
-                    70 + wave, 25,
-                    2.5f,
-                    Color.rgb(255, 159, 167)
+                    c, 69 + wave, 27,
+                    3, PINK
                 );
-
             } else {
-                leg(c, 55, 53, walkPhase, false);
+                leg(c, 55, 54, 0, false);
             }
 
-            // Tai
-            ear(c, 28, 19, true);
-            ear(c, 52, 19, false);
+            ear(c, 27, 20, true);
+            ear(c, 54, 20, false);
 
-            // Đầu mèo
-            circle(c, 41, 29, 23, ORANGE);
-
-            // Má trắng
-            oval(
-                c, 24, 31, 58, 49,
-                CREAM
+            glossyOval(
+                c, 17, 9, 65, 57,
+                LIGHT, 0xFFE99549
             );
 
-            // Vệt lông trên trán
-            line(c, 35, 10, 36, 17, 2, DARK);
-            line(c, 43, 9, 43, 16, 2, DARK);
-            line(c, 51, 11, 49, 17, 2, DARK);
+            glossyOval(
+                c, 23, 30, 59, 51,
+                CREAM, 0xFFF1E0CB
+            );
+
+            line(c, 35, 13, 36, 19, 2, DARK);
+            line(c, 43, 12, 43, 19, 2, DARK);
+            line(c, 51, 14, 49, 20, 2, DARK);
 
             boolean blink =
-                (SystemClock.uptimeMillis() % 4100)
-                    < 180;
+                SystemClock.uptimeMillis() % 3900 < 150;
 
             if (state == 3 || blink) {
-                line(c, 30, 29, 37, 29, 2, DARK);
-                line(c, 46, 29, 53, 29, 2, DARK);
+                line(c, 28, 31, 37, 31, 2, DARK);
+                line(c, 46, 31, 55, 31, 2, DARK);
             } else {
-                oval(c, 30, 24, 38, 34, DARK);
-                oval(c, 46, 24, 54, 34, DARK);
+                glossyOval(
+                    c, 27, 25, 39, 39,
+                    0xFF66483B, 0xFF201D22
+                );
 
-                circle(c, 33, 27, 2.3f, Color.WHITE);
-                circle(c, 49, 27, 2.3f, Color.WHITE);
+                glossyOval(
+                    c, 44, 25, 56, 39,
+                    0xFF66483B, 0xFF201D22
+                );
+
+                circle(c, 32, 29, 3, Color.WHITE);
+                circle(c, 49, 29, 3, Color.WHITE);
+                circle(c, 35, 34, 1.2f, Color.WHITE);
+                circle(c, 52, 34, 1.2f, Color.WHITE);
             }
 
-            // Mũi và miệng
-            circle(
-                c, 42, 37, 3,
-                Color.rgb(240, 120, 137)
-            );
+            circle(c, 41, 39, 3.3f, PINK);
 
-            line(c, 42, 39, 42, 42, 1.4f, DARK);
-            line(c, 42, 42, 38, 44, 1.4f, DARK);
-            line(c, 42, 42, 46, 44, 1.4f, DARK);
+            line(c, 41, 41, 41, 44, 1.5f, DARK);
+            line(c, 41, 44, 37, 46, 1.5f, DARK);
+            line(c, 41, 44, 45, 46, 1.5f, DARK);
 
-            // Râu
-            line(c, 24, 39, 13, 36, 1.1f, DARK);
-            line(c, 24, 43, 12, 44, 1.1f, DARK);
-            line(c, 59, 39, 70, 36, 1.1f, DARK);
-            line(c, 59, 43, 71, 44, 1.1f, DARK);
+            line(c, 24, 40, 12, 37, 1, DARK);
+            line(c, 24, 44, 12, 45, 1, DARK);
+            line(c, 58, 40, 70, 37, 1, DARK);
+            line(c, 58, 44, 70, 45, 1, DARK);
 
-            // Má hồng
-            circle(
-                c, 27, 38, 3,
-                0x77FF8899
-            );
-            circle(
-                c, 56, 38, 3,
-                0x77FF8899
-            );
+            circle(c, 26, 39, 3, 0x77FF8299);
+            circle(c, 57, 39, 3, 0x77FF8299);
 
             if (state == 3) {
-                p.setColor(
-                    Color.rgb(123, 83, 176)
-                );
-                p.setTypeface(
-                    Typeface.DEFAULT_BOLD
-                );
+                p.setShader(null);
+                p.setColor(0xFF9566CC);
+                p.setTypeface(Typeface.DEFAULT_BOLD);
                 p.setTextSize(12);
-                c.drawText("Zzz", 54, 9, p);
+                c.drawText("Zzz", 54, 10, p);
             }
 
             c.restore();
